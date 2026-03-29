@@ -1,14 +1,8 @@
 use crate::RandomCPFType::*;
-use cpf_experiment::byte_cpf::ByteCPFValidator;
-use cpf_experiment::byte_cpf_baseline::BaselineByteCPFValidator;
-use cpf_experiment::byte_cpf_simd::SimdByteCPFValidator;
-use cpf_experiment::cpf::CPFValidator;
-use cpf_experiment::cpf_baseline::BaselineCPFValidator;
-use cpf_experiment::cpf_simd::SimdCPFValidator;
-use cpf_experiment::cpf_unrolled::UnrolledCPFValidator;
-use cpf_experiment::int_cpf::IntCPFValidator;
-use cpf_experiment::int_cpf_baseline::IntCPFNaiveValidator;
-use cpf_experiment::int_cpf_unrolled::UnrolledIntCPFValidator;
+use cpf_experiment::byte_cpf::*;
+use cpf_experiment::cpf::*;
+use cpf_experiment::float_cpf::*;
+use cpf_experiment::int_cpf::*;
 use criterion::BatchSize::SmallInput;
 use criterion::{criterion_group, criterion_main, Criterion};
 
@@ -23,6 +17,11 @@ fn run_int_validation(validator: &mut impl IntCPFValidator, cpf: u64) -> Result<
 }
 
 #[inline]
+fn run_float_validation(validator: &mut impl FloatCPFValidator, cpf: f64) -> Result<(), &'static str> {
+    validator.validate(cpf)
+}
+
+#[inline]
 fn run_byte_validation(validator: &mut impl ByteCPFValidator, cpf: &[u8]) -> Result<(), &'static str> {
     validator.validate(cpf)
 }
@@ -33,12 +32,13 @@ enum RandomCPFType {
     Valid,
     InvalidFirst,
     InvalidSecond,
+    Mixed,
 }
 
 #[allow(dead_code)]
 mod random_cpf {
     use crate::RandomCPFType;
-    use crate::RandomCPFType::{InvalidFirst, InvalidSecond, Valid};
+    use crate::RandomCPFType::*;
     use cpf_experiment::generator::CPFGenerator;
 
     fn next_valid() -> String {
@@ -75,11 +75,21 @@ mod random_cpf {
             Valid => next_valid(),
             InvalidFirst => next_invalid(),
             InvalidSecond => next_invalid_second(),
+            Mixed => match rand::random_range(0..20) {
+                0..=14 => next_valid(),
+                15..=17 => next_invalid(),
+                18..=20 => next_invalid_second(),
+                _ => unreachable!(),
+            }
         }
     }
 
     pub(crate) fn next_int(t: RandomCPFType) -> u64 {
         cpf_experiment::convert::cpf_string_to_int(&next(t)).expect("Invalid CPF")
+    }
+
+    pub(crate) fn next_float(t: RandomCPFType) -> f64 {
+        cpf_experiment::convert::cpf_string_to_float(&next(t)).expect("Invalid CPF")
     }
 
     pub(crate) fn next_bytes(t: RandomCPFType) -> Vec<u8> {
@@ -92,11 +102,15 @@ fn validator_bench(c: &mut Criterion) {
     let mut unrolled = UnrolledCPFValidator::new();
     let mut simd = SimdCPFValidator::new();
 
-    let mut int_baseline = IntCPFNaiveValidator::new();
+    let mut int_baseline = IntCPFBaselineValidator::new();
     let mut int_unrolled = UnrolledIntCPFValidator::new();
 
     let mut byte_baseline = BaselineByteCPFValidator::new();
+    let mut byte_unrolled = UnrolledByteCPFValidator::new();
     let mut byte_simd = SimdByteCPFValidator::new();
+
+    let mut float_baseline = FloatCPFBaselineValidator::new();
+    let mut float_unrolled = FloatCPFUnrolledValidator::new();
 
     let param_valid = (Valid, "Valid CPFs".to_string());
     let param_invalid = (
@@ -107,7 +121,11 @@ fn validator_bench(c: &mut Criterion) {
         InvalidSecond,
         "Invalid CPFs (second checksum digit)".to_string(),
     );
-    let params = vec![param_valid, param_invalid, param_invalid_second];
+    let param_mixed = (
+        Mixed,
+        "Mixed valid and invalid CPFs".to_string(),
+    );
+    let params = vec![param_valid, param_invalid, param_invalid_second, param_mixed];
 
     let mut group = c.benchmark_group("cpf_validation");
     for (param, desc) in params {
@@ -178,12 +196,45 @@ fn validator_bench(c: &mut Criterion) {
             },
         );
         group.bench_with_input(
+            criterion::BenchmarkId::new("Byte Unrolled", &desc),
+            &param,
+            |b, val| {
+                b.iter_batched(
+                    || random_cpf::next_bytes(*val),
+                    |n| run_byte_validation(&mut byte_unrolled, &n),
+                    SmallInput,
+                )
+            },
+        );
+        group.bench_with_input(
             criterion::BenchmarkId::new("Byte SIMD", &desc),
             &param,
             |b, val| {
                 b.iter_batched(
                     || random_cpf::next_bytes(*val),
                     |n| run_byte_validation(&mut byte_simd, &n),
+                    SmallInput,
+                )
+            },
+        );
+        group.bench_with_input(
+            criterion::BenchmarkId::new("Float Baseline", &desc),
+            &param,
+            |b, val| {
+                b.iter_batched(
+                    || random_cpf::next_float(*val),
+                    |n| run_float_validation(&mut float_baseline, n),
+                    SmallInput,
+                )
+            },
+        );
+        group.bench_with_input(
+            criterion::BenchmarkId::new("Float Unrolled", &desc),
+            &param,
+            |b, val| {
+                b.iter_batched(
+                    || random_cpf::next_float(*val),
+                    |n| run_float_validation(&mut float_unrolled, n),
                     SmallInput,
                 )
             },

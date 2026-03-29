@@ -20,6 +20,10 @@ pub fn cpf_string_to_int(cpf: &str) -> Result<u64, &'static str> {
     Ok(sum)
 }
 
+pub fn cpf_string_to_float(cpf: &str) -> Result<f64, &'static str> {
+    cpf_string_to_int(cpf).map(|x| x as f64)
+}
+
 pub fn cpf_int_to_string(cpf: u64) -> Result<String, &'static str> {
     if cpf > 999_999_999_99 {
         return Err("CPF value exceeds maximum allowed");
